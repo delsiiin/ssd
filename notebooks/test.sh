@@ -1,0 +1,1 @@
+python test_v1_router.py --num_sample 50 --max_new_tokens 128 --top_layers_len 24 --top_k_group 4
