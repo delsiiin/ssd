@@ -17,12 +17,12 @@ datasets:
 
 dataset_prepared_path:
 val_set_size: 0.01
-output_dir: ./vicuna-7b-v1.3-qlora-ssd-out-router-top-24-k-4-seq-1024
+output_dir: ./vicuna-7b-v1.3-qlora-ssd-out-router-top-24-k-4-seq-2048
 
 adapter: qlora
 lora_model_dir:
 
-sequence_len: 1024
+sequence_len: 2048
 sample_packing: true
 pad_to_sequence_len: true
 
@@ -40,7 +40,7 @@ wandb_run_id: ssd_router_0
 wandb_log_model: checkpoint
 
 gradient_accumulation_steps: 4
-micro_batch_size: 4
+micro_batch_size: 2
 num_epochs: 1
 optimizer: adamw_bnb_8bit
 lr_scheduler: cosine
@@ -63,7 +63,7 @@ flash_attention: true
 warmup_steps: 10
 eval_steps: 0.05
 eval_table_size:
-save_steps:
+save_steps: 200
 debug: 
 deepspeed: 
 weight_decay: 0.0
@@ -91,4 +91,4 @@ router_lr_multiplier: 5.0
 
 seed: 42
 
-early_stopping_patience: 3
+# early_stopping_patience: 3
