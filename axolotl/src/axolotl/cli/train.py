@@ -17,13 +17,39 @@ from axolotl.cli import (
 from axolotl.common.cli import TrainerCliArgs
 from axolotl.train import train
 
+import torch
+
+import random
+
+import numpy as np
+
 LOG = logging.getLogger("axolotl.cli.train")
+
+
+def seed_torch(seed=42):
+ 
+    random.seed(seed)
+ 
+    np.random.seed(seed)
+ 
+    torch.manual_seed(seed)
+ 
+    torch.cuda.manual_seed(seed)
+ 
+    torch.cuda.manual_seed_all(seed) 
+ 
+    torch.backends.cudnn.benchmark = False
+ 
+    torch.backends.cudnn.deterministic = True
 
 
 def do_cli(config: Path = Path("examples/"), **kwargs):
     # pylint: disable=duplicate-code
     print_axolotl_text_art()
     parsed_cfg = load_cfg(config, **kwargs)
+
+    seed_torch(seed=parsed_cfg.seed)
+
     check_accelerate_default_config()
     check_user_token()
     parser = transformers.HfArgumentParser((TrainerCliArgs))
