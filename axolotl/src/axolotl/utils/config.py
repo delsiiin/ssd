@@ -141,23 +141,7 @@ def normalize_config(cfg):
     #         assert cfg.adapter is not None, "adapter is required for medusa_self_distillation"
 
 
-    if cfg.ssd_layer_group or cfg.ssd_layer_groups_path is not None:
-        cfg.ssd_layer_group = [int(x) for x in cfg.ssd_layer_group.split(",")] if cfg.ssd_layer_group is not None else None
-        cfg.ssd_layer_groups_path = cfg.ssd_layer_groups_path if cfg.ssd_layer_groups_path is not None else None
-        # 从 JSON 文件中读取 attn 和 mlp 的解
-        try:
-            with open(cfg.ssd_layer_groups_path, 'r') as json_file:
-                loaded_solution = json.load(json_file)
-                attn_solution = loaded_solution.get("attn_solution", {})
-                mlp_solution = loaded_solution.get("mlp_solution", {})
-
-                cfg.ssd_layer_groups = [[layers for group, layers in attn_solution.items()]] + [[layers for group, layers in mlp_solution.items()]]
-
-                print(cfg.ssd_layer_groups)
-
-        except FileNotFoundError:
-            print("No solution file found.")
-        
+    if cfg.top_k_group is not None: 
         cfg.top_layers_len = cfg.top_layers_len if cfg.top_layers_len is not None else 0
         cfg.top_k_group = cfg.top_k_group if cfg.top_k_group is not None else None
         cfg.ssd_logging = cfg.ssd_logging if cfg.ssd_logging is not None else False
@@ -170,6 +154,11 @@ def normalize_config(cfg):
         cfg.router_only = cfg.router_only if cfg.router_only is not None else False
         cfg.resnet_num = cfg.resnet_num if cfg.resnet_num is not None else 1
         cfg.router_lr_multiplier = cfg.router_lr_multiplier if cfg.router_lr_multiplier is not None else 1.0
+        cfg.early_exit = cfg.early_exit if cfg.early_exit is not None else False
+        cfg.ee_only = cfg.ee_only if cfg.ee_only is not None else False
+
+        cfg.davm = cfg.davm if cfg.davm is not None else False
+        cfg.davm_only = cfg.davm_only if cfg.davm_only is not None else False
 
 
     if isinstance(cfg.learning_rate, str):

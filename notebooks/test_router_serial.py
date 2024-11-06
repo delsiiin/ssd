@@ -5,7 +5,7 @@ from contextlib import contextmanager
 import numpy as np
 # from medusa.model.modeling_llama_ssd_v1 import LlamaForCausalLM
 # from medusa.model.modeling_llama_ssd_v1_top_layers import LlamaForCausalLM
-from medusa.model.modeling_llama_ssd_router import LlamaForCausalLM, add_router
+
 # from medusa.model.modeling_llama_ssd_v3 import LlamaForCausalLM
 # from transformers.models.llama.modeling_llama import LlamaForCausalLM 
 from medusa.model.configuration_llama_ssd import LlamaConfig
@@ -32,6 +32,8 @@ import time
 
 from utils import *
 
+from rouge_score import rouge_scorer
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -52,6 +54,8 @@ if __name__ == '__main__':
     parser.add_argument("--top_layers_len", type=int, required=False, help="top layers to keep", default=20)
     parser.add_argument("--top_k_group", type=int, required=False, help="Draft group num.", default=4)
     parser.add_argument("--resnet_num", type=int, required=False, help="resnet num.", default=1)
+    parser.add_argument("--early_exit", action='store_true', required=False, default=False)
+    parser.add_argument("--davm", action='store_true', required=False, default=False)
     
     args = parser.parse_args()
 
@@ -94,8 +98,16 @@ if __name__ == '__main__':
     
     # print(config.num_skipped_draft_model)
 
-    lora_path = f"/root/idea/speculative_decoding/Medusa/axolotl/vicuna-7b-v1.3-qlora-ssd-out-router-top-{args.top_layers_len}-k-{args.top_k_group}-seq-2048"
+    lora_path = f"/root/idea/speculative_decoding/Medusa/axolotl/vicuna-7b-v1.3-qlora-ssd-out-router-top-{args.top_layers_len}-k-{args.top_k_group}-seq-1024-davm"
     lora_config = PeftConfig.from_pretrained(lora_path)
+
+    if args.early_exit:
+        from medusa.model.modeling_llama_ssd_router_ee import LlamaForCausalLM, add_router
+    elif args.davm:
+        from medusa.model.modeling_llama_ssd_router_dmlp_vattn import LlamaForCausalLM, add_router
+    else:
+        from medusa.model.modeling_llama_ssd_router import LlamaForCausalLM, add_router
+        
 
     model = LlamaForCausalLM.from_pretrained(
         model_name,
@@ -108,6 +120,8 @@ if __name__ == '__main__':
 
     model = PeftModel.from_pretrained(model, lora_path)
 
+    model = model.merge_and_unload()
+
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     total_avg_accept_length = 0
@@ -115,6 +129,8 @@ if __name__ == '__main__':
     start_time = time.time()
 
     with torch.no_grad():
+
+        all_rouge_score = []
 
         for idx,x in tqdm(enumerate(data)):
 
@@ -178,7 +194,12 @@ if __name__ == '__main__':
 
                 cur_length = input_len
                 accept_lengths.append(1)
+                step = 0
                 for _ in range(args.max_new_tokens):
+
+                    if step >= args.max_new_tokens:
+                        break
+
                     with model.self_draft():
                         draft_logits, base_logits = model(preds.cuda().unsqueeze(0), output_orig = True, past_key_values = model.past_key_values, top_layers_len=args.top_layers_len)
                     inference_count += 1
@@ -230,6 +251,7 @@ if __name__ == '__main__':
                     # preds = torch.cat([pred[:, accept_length], draft_pred[:accept_length,0,0]], dim = -1)
                     # print(f'Prediction @ {inference_count}: {tokenizer.batch_decode(pred[0, :accept_length + 1])}')
                     accept_lengths.append(accept_length + 1)
+                    step += accept_length + 1
                     if tokenizer.eos_token_id in pred[0, :accept_length + 1] or cur_length + draft_pred.shape[0] >= args.max_seq_length:
                         break
                 
@@ -240,9 +262,31 @@ if __name__ == '__main__':
             # plt.ylabel('Accept length')
             # plt.savefig('accept_length.png')
             print('Avg. accept length:', np.mean(accept_lengths))
-            print('Token num:', np.sum(accept_lengths))
+            print('Token num:', step)
+
+            result = tokenizer.decode(output_token, skip_special_tokens=True)
+
+            rouge=rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
+
+            if task_name == 'xsum':
+                references = x['summary']
+            elif task_name =='cnndm':
+                references = x['highlights']
+
+            clip_pred = result.find("\nArticle:")
+            if clip_pred > 0:
+                prediction = result[:clip_pred]
+            else:
+                prediction = result
+            rouge_score = rouge.score(prediction, references)
+
+            rouge_score = rouge_score['rouge2'].fmeasure
+
+            all_rouge_score.append(rouge_score)
 
             total_avg_accept_length += np.mean(accept_lengths)
     
     print('Total avg. accept length:', total_avg_accept_length / args.num_sample)
     print('Total time:', end_time - start_time)
+
+    print('Avg rouge score:', np.mean(all_rouge_score))

@@ -5,7 +5,7 @@ from contextlib import contextmanager
 import numpy as np
 # from medusa.model.modeling_llama_ssd_v1 import LlamaForCausalLM
 # from medusa.model.modeling_llama_ssd_v1_top_layers import LlamaForCausalLM
-from medusa.model.modeling_llama_ssd_router_tree import LlamaForCausalLM, add_router
+# from medusa.model.modeling_llama_ssd_router_tree import LlamaForCausalLM, add_router
 # from medusa.model.modeling_llama_ssd_v3 import LlamaForCausalLM
 # from transformers.models.llama.modeling_llama import LlamaForCausalLM 
 from medusa.model.configuration_llama_ssd import LlamaConfig
@@ -52,6 +52,8 @@ if __name__ == '__main__':
     parser.add_argument("--top_layers_len", type=int, required=False, help="top layers to keep", default=20)
     parser.add_argument("--top_k_group", type=int, required=False, help="Draft group num.", default=4)
     parser.add_argument("--resnet_num", type=int, required=False, help="resnet num.", default=1)
+    parser.add_argument("--early_exit", action='store_true', required=False, default=False)
+    parser.add_argument("--davm", action='store_true', required=False, default=False)
     
     args = parser.parse_args()
 
@@ -94,8 +96,15 @@ if __name__ == '__main__':
     
     # print(config.num_skipped_draft_model)
 
-    lora_path = "/root/idea/speculative_decoding/Medusa/axolotl/vicuna-7b-v1.3-qlora-ssd-out-router-top-24-k-4-seq-2048"
+    lora_path = f"/root/idea/speculative_decoding/Medusa/axolotl/vicuna-7b-v1.3-qlora-ssd-out-router-top-{args.top_layers_len}-k-{args.top_k_group}"
     lora_config = PeftConfig.from_pretrained(lora_path)
+
+    if args.early_exit:
+        from medusa.model.modeling_llama_ssd_router_ee import LlamaForCausalLM, add_router
+    elif args.davm:
+        from medusa.model.modeling_llama_ssd_router_dmlp_vattn import LlamaForCausalLM, add_router
+    else:
+        from medusa.model.modeling_llama_ssd_router import LlamaForCausalLM, add_router
 
     model = LlamaForCausalLM.from_pretrained(
         model_name,
@@ -107,6 +116,8 @@ if __name__ == '__main__':
     add_router(model)
 
     model = PeftModel.from_pretrained(model, lora_path)
+
+    model = model.merge_and_unload()
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -158,8 +169,11 @@ if __name__ == '__main__':
         
                 cur_length = input_len + 1
                 accept_lengths_tree.append(1)
-
+                step = 0
                 for _ in range(args.max_new_tokens):
+
+                    if step >= args.max_new_tokens:
+                        break
                     
                     candidates, tree_candidates = generate_candidates(
                         ssd_logits,
@@ -199,6 +213,7 @@ if __name__ == '__main__':
                     accept_length_tree = input_ids.shape[1] - cur_length
                     cur_length = accept_length_tree + cur_length
                     accept_lengths_tree.append(accept_length_tree)
+                    step += accept_length_tree
                     if tokenizer.eos_token_id in input_ids[0, input_len:] or cur_length + new_token >= args.max_seq_length:
                         break
 
@@ -212,7 +227,7 @@ if __name__ == '__main__':
             print('Avg. accept length:', np.mean(accept_lengths_tree))
 
             total_avg_accept_length += np.mean(accept_lengths_tree)
-            print('Token num:', np.sum(accept_lengths_tree))
+            print('Token num:', step)
     
     print('Total avg. accept length:', total_avg_accept_length / args.num_sample)
     print('Total time:', end_time - start_time)

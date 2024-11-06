@@ -49,7 +49,7 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
-from .configuration_llama_ssd import LlamaConfig
+from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers import top_k_top_p_filtering
 
 import copy
@@ -675,8 +675,8 @@ class LlamaDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         padding_mask: Optional[torch.LongTensor] = None,
-        draft_attn_skip_mask: torch.Tensor = None,
-        draft_mlp_skip_mask: torch.Tensor = None,
+        top_layers_len = None,
+        drafting = None,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
         Args:
@@ -694,10 +694,8 @@ class LlamaDecoderLayer(nn.Module):
 
         residual = hidden_states
 
-        if draft_attn_skip_mask is None or (self.layer_idx not in draft_attn_skip_mask):
-            hidden_states = residual
-            present_key_value = None
-        elif self.layer_idx in draft_attn_skip_mask:
+        if drafting or (not drafting and self.layer_idx < top_layers_len):
+
             hidden_states = self.input_layernorm(hidden_states)
 
             # Self Attention
@@ -707,20 +705,30 @@ class LlamaDecoderLayer(nn.Module):
                 position_ids=position_ids,
                 past_key_value=past_key_value,
                 output_attentions=output_attentions,
+                padding_mask=padding_mask,
                 use_cache=use_cache,
             )
-            
+
             hidden_states = residual + hidden_states
 
+        else:
+
+            hidden_states = residual
+            present_key_value = None
+
+        
         # Fully Connected
         residual = hidden_states
+
+        if not drafting:
         
-        if draft_mlp_skip_mask is None or (self.layer_idx not in draft_mlp_skip_mask):
-            hidden_states = residual
-        elif self.layer_idx in draft_mlp_skip_mask:
             hidden_states = self.post_attention_layernorm(hidden_states)
             hidden_states = self.mlp(hidden_states)
             hidden_states = residual + hidden_states
+
+        else:
+
+            hidden_states = residual
 
         outputs = (hidden_states,)
 
@@ -841,7 +849,6 @@ LLAMA_INPUTS_DOCSTRING = r"""
             Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
 """
 
-
 @add_start_docstrings(
     "The bare LLaMA Model outputting raw hidden-states without any specific head on top.",
     LLAMA_START_DOCSTRING,
@@ -862,6 +869,8 @@ class LlamaModel(LlamaPreTrainedModel):
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+        # self.router = NoisyTopkRouter(config.hidden_size, config.num_hidden_layers - config.top_layers_len, config.top_k)
 
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
@@ -910,8 +919,7 @@ class LlamaModel(LlamaPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        draft_attn_skip_masks: Optional[List[torch.Tensor]] = None,
-        draft_mlp_skip_masks: Optional[List[torch.Tensor]] = None,
+        top_layers_len: Optional[int] = 12,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -988,125 +996,124 @@ class LlamaModel(LlamaPreTrainedModel):
         next_decoder_cache = () if use_cache else None
 
         # print(draft_attn_skip_masks, draft_mlp_skip_masks)
+        hidden_states_for_draft = None
 
-        if draft_attn_skip_masks is None and draft_mlp_skip_masks is None:
+        for idx, decoder_layer in enumerate(self.layers):
+            
+            if idx == top_layers_len:
+                hidden_states_for_draft = hidden_states
 
-            for idx, decoder_layer in enumerate(self.layers):
-                if output_hidden_states:
-                    all_hidden_states += (hidden_states,)
-
-                past_key_value = past_key_values[idx] if past_key_values is not None else None
-
-                if self.gradient_checkpointing and self.training:
-
-                    def create_custom_forward(module):
-                        def custom_forward(*inputs):
-                            # None for past_key_value
-                            return module(*inputs, past_key_value, output_attentions, padding_mask=padding_mask)
-
-                        return custom_forward
-
-                    layer_outputs = torch.utils.checkpoint.checkpoint(
-                        create_custom_forward(decoder_layer), hidden_states, attention_mask, position_ids
-                    )
-                else:
-                    layer_outputs = decoder_layer(
-                        hidden_states,
-                        attention_mask=attention_mask,
-                        position_ids=position_ids,
-                        past_key_value=past_key_value,
-                        output_attentions=output_attentions,
-                        use_cache=use_cache,
-                        padding_mask=padding_mask,
-                    )
-
-                hidden_states = layer_outputs[0]
-
-                if use_cache:
-                    next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
-
-                if output_attentions:
-                    all_self_attns += (layer_outputs[1],)
-
-            hidden_states = self.norm(hidden_states)
-
-            # add hidden states from the last decoder layer
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            next_cache = next_decoder_cache if use_cache else None
-            if not return_dict:
-                return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
-            return BaseModelOutputWithPast(
-                last_hidden_state=hidden_states,
-                past_key_values=next_cache,
-                hidden_states=all_hidden_states,
-                attentions=all_self_attns,
-            )
-        
-        else:
+            past_key_value = past_key_values[idx] if past_key_values is not None else None
+
+            if self.gradient_checkpointing and self.training:
+                    
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        # None for past_key_value
+                        return module(*inputs, past_key_value, output_attentions, padding_mask=padding_mask, top_layers_len=top_layers_len, drafting=False)
+
+                    return custom_forward
             
-            draft_hidden_states = []
-            for draft_attn_skip_mask, draft_mlp_skip_mask in zip(draft_attn_skip_masks, draft_mlp_skip_masks):
-                for idx, decoder_layer in enumerate(self.layers):
-                    if output_hidden_states:
-                        all_hidden_states += (hidden_states,)
+                layer_outputs = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(decoder_layer), hidden_states, attention_mask, position_ids
+                )
 
-                    past_key_value = past_key_values[idx] if past_key_values is not None else None
+            else:
 
-                    # if self.gradient_checkpointing and self.training:
+                layer_outputs = decoder_layer(
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_value=past_key_value,
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                    padding_mask=padding_mask,
+                    top_layers_len=top_layers_len,
+                    drafting=False,
+                )
 
-                    #     def create_custom_forward(module):
-                    #         def custom_forward(*inputs):
-                    #             # None for past_key_value
-                    #             return module(*inputs, past_key_value, output_attentions, padding_mask=padding_mask)
+            hidden_states = layer_outputs[0]
 
-                    #         return custom_forward
+        base_hidden_states = self.norm(hidden_states)
 
-                    #     layer_outputs = torch.utils.checkpoint.checkpoint(
-                    #         create_custom_forward(decoder_layer), hidden_states, attention_mask, position_ids
-                    #     )
-                    # else:
-                    layer_outputs = decoder_layer(
-                        hidden_states,
-                        attention_mask=attention_mask,
-                        position_ids=position_ids,
-                        past_key_value=past_key_value,
-                        output_attentions=output_attentions,
-                        use_cache=use_cache,
-                        padding_mask=padding_mask,
-                        draft_attn_skip_mask=draft_attn_skip_mask,
-                        draft_mlp_skip_mask=draft_mlp_skip_mask,
-                    )
+        # for name, param in self.router.named_parameters():
+        #     print(name, param)
 
-                    hidden_states = layer_outputs[0]
+        # print(group_mask.shape)
 
-                    if use_cache:
-                        next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
+        draft_hidden_states = []
 
-                    if output_attentions:
-                        all_self_attns += (layer_outputs[1],)
+        # Find the most frequent elements along the third dimension of topk_indices
+        # topk_indices = topk_indices.mode(dim=1).values
+        
+        for idx, decoder_layer in enumerate(self.layers[top_layers_len:]):
 
-                hidden_states = self.norm(hidden_states)
+            hidden_states = hidden_states_for_draft
 
-                draft_hidden_states.append(hidden_states)
+            past_key_value = past_key_values[idx + top_layers_len] if past_key_values is not None else None
 
-                # print(draft_hidden_states)
+            if self.gradient_checkpointing and self.training:
 
-                # add hidden states from the last decoder layer
-                if output_hidden_states:
-                    all_hidden_states += (hidden_states,)
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        # None for past_key_value
+                        return module(*inputs, past_key_value, output_attentions, padding_mask=padding_mask, top_layers_len=top_layers_len, drafting=True)
 
-                next_cache = next_decoder_cache if use_cache else None
+                    return custom_forward
 
-            # if not return_dict:
-            return tuple(v for v in [draft_hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
-            # return BaseModelOutputWithPast(
-            #     last_hidden_state=hidden_states,
-            #     past_key_values=next_cache,
-            #     hidden_states=all_hidden_states,
-            #     attentions=all_self_attns,
-            # )
+                layer_outputs = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(decoder_layer), hidden_states, attention_mask, position_ids
+                )
+
+            else:
+                layer_outputs = decoder_layer(
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_value=past_key_value,
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                    padding_mask=padding_mask,
+                    top_layers_len=top_layers_len,
+                    drafting=True,
+                )
+
+            hidden_states = layer_outputs[0]
+
+            if use_cache:
+                next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
+
+            if output_attentions:
+                all_self_attns += (layer_outputs[1],)
+
+            hidden_states = self.norm(hidden_states)
+
+        
+            draft_hidden_states.append(hidden_states)
+
+        # print(draft_hidden_states)
+
+        # # add hidden states from the last decoder layer
+        # if output_hidden_states:
+        #     all_hidden_states += (hidden_states,)
+
+        next_cache = next_decoder_cache if use_cache else None
+
+        return_dict = False
+
+        draft_hidden_states = torch.stack(draft_hidden_states, dim=0)
+
+        if not return_dict:
+            return tuple(v for v in [draft_hidden_states, base_hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
+        return BaseModelOutputWithPast(
+            last_hidden_state=hidden_states,
+            past_key_values=next_cache,
+            hidden_states=all_hidden_states,
+            attentions=all_self_attns,
+        )
 
 
 class LlamaForCausalLM(LlamaPreTrainedModel):
@@ -1118,7 +1125,13 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-        self.itr_count = 0
+        # self.itr_count = 0
+        self.ssd_layer_groups = config.ssd_layer_groups
+        self.top_k_group = config.top_k_group
+        self.hidden_size = config.hidden_size
+        self.top_layers_len = config.top_layers_len
+        self.num_hidden_layers = config.num_hidden_layers
+        self.resnet_num = config.resnet_num
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1190,9 +1203,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        draft_attn_skip_masks: Optional[List[torch.Tensor]] = None,
-        draft_mlp_skip_masks: Optional[List[torch.Tensor]] = None,
-        output_orig=False,
+        top_layers_len: Optional[int] = 12,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         Args:
@@ -1226,142 +1237,92 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if not enabled_draft:
-            # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-            outputs = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            top_layers_len=self.top_layers_len,
+        )
 
-            hidden_states = outputs[0]
-            if self.config.pretraining_tp > 1:
-                lm_head_slices = self.lm_head.weight.split(self.vocab_size // self.config.pretraining_tp, dim=0)
-                logits = [F.linear(hidden_states, lm_head_slices[i]) for i in range(self.config.pretraining_tp)]
-                logits = torch.cat(logits, dim=-1)
-            else:
-                logits = self.lm_head(hidden_states)
-            logits = logits.float()
+        all_draft_hidden_states = outputs[0]
+        base_hidden_states = outputs[1]
 
-            loss = None
-            if labels is not None:
-                # Shift so that tokens < n predict n
-                shift_logits = logits[..., :-1, :].contiguous()
-                shift_labels = labels[..., 1:].contiguous()
-                # Flatten the tokens
-                loss_fct = CrossEntropyLoss()
-                shift_logits = shift_logits.view(-1, self.config.vocab_size)
-                shift_labels = shift_labels.view(-1)
-                # Enable model parallelism
-                shift_labels = shift_labels.to(shift_logits.device)
-                loss = loss_fct(shift_logits, shift_labels)
+        all_draft_hidden_states = self.router(all_draft_hidden_states).permute(3, 0, 1, 2).contiguous()
 
-            if not return_dict:
-                output = (logits,) + outputs[1:]
-                return (loss,) + output if loss is not None else output
-            
-            self.itr_count += 1
-
-            return CausalLMOutputWithPast(
-                loss=loss,
-                logits=logits,
-                past_key_values=outputs.past_key_values,
-                hidden_states=outputs.hidden_states,
-                attentions=outputs.attentions,
-            )
+        # print(all_draft_hidden_states.shape, all_draft_hidden_states)
         
+        # for name, param in self.router.named_parameters():
+        #     print(name, param)
+
+        # print(past_key_values[0][0].shape[2])
+        all_draft_logits = []
+        if self.config.pretraining_tp > 1:
+            
+            base_logits = [F.linear(base_hidden_states, lm_head_slices[i]) for i in range(self.config.pretraining_tp)]
+            base_logits = torch.cat(base_logits, dim=-1)
+            base_logits = base_logits.float()
+
+            all_draft_logits.append(base_logits)
+
+            lm_head_slices = self.lm_head.weight.split(self.vocab_size // self.config.pretraining_tp, dim=0)
+            
+            for idx in range(all_draft_hidden_states.shape[0]):
+                draft_logits = [F.linear(all_draft_hidden_states[idx], lm_head_slices[i]) for i in range(self.config.pretraining_tp)]
+                draft_logits = torch.cat(draft_logits, dim=-1)
+                draft_logits = draft_logits.float()
+
+                all_draft_logits.append(draft_logits)
+            
+            all_draft_logits = torch.stack(all_draft_logits, dim=0)
+            
         else:
-
-            # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-            # a deepcopy of past_key_values (a simple implementation)
-            if self.itr_count > 0:
-                past_key_values_draft = copy.deepcopy(past_key_values)
             
-            base_outputs = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
+            base_logits = self.lm_head(base_hidden_states)
+            base_logits = base_logits.float()
 
-            if output_orig:
-                base_hidden_states = base_outputs[0]
-                
-                base_logits = self.lm_head(base_hidden_states)
-                
-                base_logits = base_logits.float()
+            all_draft_logits.append(base_logits)
 
-            # print(past_key_values[0][0].shape[2])
-            
-
-            if self.itr_count == 0:
-                past_key_values_draft = copy.deepcopy(past_key_values)
-
-                all_draft_logits = []
-                
-                input_ids = torch.argmax(base_logits[..., -1, :], dim=-1).unsqueeze(0)
-
-                draft_outputs = self.model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_values=past_key_values_draft,
-                    inputs_embeds=inputs_embeds,
-                    use_cache=use_cache,
-                    output_attentions=output_attentions,
-                    output_hidden_states=output_hidden_states,
-                    return_dict=return_dict,
-                    draft_attn_skip_masks=draft_attn_skip_masks,
-                    draft_mlp_skip_masks=draft_mlp_skip_masks,
-                )
-
-            else:
-
-                all_draft_logits = []
-                
-                draft_outputs = self.model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_values=past_key_values_draft,
-                    inputs_embeds=inputs_embeds,
-                    use_cache=use_cache,
-                    output_attentions=output_attentions,
-                    output_hidden_states=output_hidden_states,
-                    return_dict=return_dict,
-                    draft_attn_skip_masks=draft_attn_skip_masks,
-                    draft_mlp_skip_masks=draft_mlp_skip_masks,
-                )
-
-            # print(draft_outputs)
-
-            for draft_hidden_states in draft_outputs[0]:
-                draft_logits = self.lm_head(draft_hidden_states)
+            for idx in range(all_draft_hidden_states.shape[0]):
+                draft_logits = self.lm_head(all_draft_hidden_states[idx])
                 draft_logits = draft_logits.float()
 
                 all_draft_logits.append(draft_logits)
 
             all_draft_logits = torch.stack(all_draft_logits, dim=0)
 
-            self.itr_count += 1
 
-            # print(all_draft_logits)
+        loss = None
+        if labels is not None:
+            # Shift so that tokens < n predict n
+            shift_logits = draft_logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss_fct = CrossEntropyLoss()
+            shift_logits = shift_logits.view(-1, self.config.vocab_size)
+            shift_labels = shift_labels.view(-1)
+            # Enable model parallelism
+            shift_labels = shift_labels.to(shift_logits.device)
+            loss = loss_fct(shift_logits, shift_labels)
 
-            if output_orig:
-                return all_draft_logits, base_outputs, base_logits
-            
-            return all_draft_logits
+        return_dict = False
+
+        if not return_dict:
+            output = (all_draft_logits,) + outputs[2:]
+            return (loss,) + output if loss is not None else output
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=draft_logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
 
     def prepare_inputs_for_generation(
         self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs

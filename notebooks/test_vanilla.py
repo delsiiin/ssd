@@ -33,6 +33,8 @@ import time
 
 from utils import *
 
+from rouge_score import rouge_scorer
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -108,6 +110,8 @@ if __name__ == '__main__':
 
     with torch.no_grad():
 
+        all_rouge_score = []
+
         for idx,x in tqdm(enumerate(data)):
 
             if idx == args.num_sample:
@@ -132,8 +136,13 @@ if __name__ == '__main__':
             with torch.inference_mode():
 
                 cur_length = input_len
+
+                step = 0
                 
                 for _ in range(args.max_new_tokens):
+
+                    if step >= args.max_new_tokens:
+                        break
                     
                     outputs = model(input_ids, past_key_values=past_key_values, return_dict=True, use_cache=True)
                     logits = outputs['logits']
@@ -152,8 +161,33 @@ if __name__ == '__main__':
 
                     cur_length += 1
 
+                    step += 1
+
                 # print(output_token)
-                
+            print('Token num:', step)
             print(f'Final output: {tokenizer.batch_decode(output_token, skip_special_tokens=True)}')
 
+            result = tokenizer.batch_decode(output_token, skip_special_tokens=True)[0]
+
+            print(result)
+
+            rouge=rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
+
+            if task_name == 'xsum':
+                references = x['summary']
+            elif task_name =='cnndm':
+                references = x['highlights']
+
+            clip_pred = result.find("\nArticle:")
+            if clip_pred > 0:
+                prediction = result[:clip_pred]
+            else:
+                prediction = result
+            rouge_score = rouge.score(prediction, references)
+
+            rouge_score = rouge_score['rouge2'].fmeasure
+
+            all_rouge_score.append(rouge_score)
+
     print('Total time:', end_time - start_time)
+    print('Avg rouge score:', np.mean(all_rouge_score))
