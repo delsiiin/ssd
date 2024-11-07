@@ -870,7 +870,7 @@ class LlamaModel(LlamaPreTrainedModel):
         self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-        self.itr_count = 0
+        # self.itr_count = 0
 
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing

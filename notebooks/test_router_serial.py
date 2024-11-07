@@ -56,6 +56,8 @@ if __name__ == '__main__':
     parser.add_argument("--resnet_num", type=int, required=False, help="resnet num.", default=1)
     parser.add_argument("--early_exit", action='store_true', required=False, default=False)
     parser.add_argument("--davm", action='store_true', required=False, default=False)
+    parser.add_argument("--lora_path", type=str, required=False, help="lora module name or path.", default='')
+    parser.add_argument("--router_path", type=str, required=False, help="router path.", default='')
     
     args = parser.parse_args()
 
@@ -74,12 +76,12 @@ if __name__ == '__main__':
     task_name = args.task_name
     prompt_shots = ''
     if task_name == 'xsum':
-        data = load_dataset('/root/DATASETS/xsum', split='test').shuffle(seed=seed).select(range(1000))
-        shots = load_dataset('/root/DATASETS/xsum',split='train').shuffle(seed=seed).select(range(n_shot))
+        data = load_dataset('/home/zmw/xsum', split='test').shuffle(seed=seed).select(range(1000))
+        shots = load_dataset('/home/zmw/xsum',split='train').shuffle(seed=seed).select(range(n_shot))
         prompt_keys=['document','summary']
     elif task_name == 'cnndm':
-        data = load_dataset('/root/DATASETS/cnn_dailymail', name='3.0.0', split='test') .shuffle(seed=seed).select(range(1000))
-        shots = load_dataset('/root/DATASETS/cnn_dailymail', name='3.0.0', split='train').shuffle(seed=seed).select(range(n_shot))
+        data = load_dataset('/home/zmw/cnn_dailymail', name='3.0.0', split='test') .shuffle(seed=seed).select(range(1000))
+        shots = load_dataset('/home/zmw/cnn_dailymail', name='3.0.0', split='train').shuffle(seed=seed).select(range(n_shot))
         prompt_keys=['article','highlights']
     for i in range(n_shot):
         prompt = 'Article: ' + shots[i][prompt_keys[0]] + '\nSummary: ' + shots[i][prompt_keys[1]].replace('\n', '') + '\n'
@@ -98,7 +100,7 @@ if __name__ == '__main__':
     
     # print(config.num_skipped_draft_model)
 
-    lora_path = f"/root/idea/speculative_decoding/Medusa/axolotl/vicuna-7b-v1.3-qlora-ssd-out-router-top-{args.top_layers_len}-k-{args.top_k_group}-seq-1024-davm"
+    lora_path = f"/home/zmw/vicuna-7b-v1.3-qlora-ssd-out-router-top-{args.top_layers_len}-k-{args.top_k_group}-davm-only-seq-2048"
     lora_config = PeftConfig.from_pretrained(lora_path)
 
     if args.early_exit:
@@ -114,11 +116,17 @@ if __name__ == '__main__':
         torch_dtype=torch.float16,
         config=config,
     )
+
     model = model.eval().to(device)
 
     add_router(model)
 
     model = PeftModel.from_pretrained(model, lora_path)
+
+    # for name, params in model.model.router.named_parameters():
+    #     print(name, params)
+    #     is_all_zeros = torch.sum(params) == 0
+    #     print(is_all_zeros)
 
     model = model.merge_and_unload()
 
@@ -257,13 +265,6 @@ if __name__ == '__main__':
                 
             print(f'Final output: {tokenizer.decode(output_token, skip_special_tokens=True)}')
 
-            # plt.plot(accept_lengths)
-            # plt.xlabel('Inference step')
-            # plt.ylabel('Accept length')
-            # plt.savefig('accept_length.png')
-            print('Avg. accept length:', np.mean(accept_lengths))
-            print('Token num:', step)
-
             result = tokenizer.decode(output_token, skip_special_tokens=True)
 
             rouge=rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
@@ -284,9 +285,15 @@ if __name__ == '__main__':
 
             all_rouge_score.append(rouge_score)
 
+            # plt.plot(accept_lengths)
+            # plt.xlabel('Inference step')
+            # plt.ylabel('Accept length')
+            # plt.savefig('accept_length.png')
+            print('Avg. accept length:', np.mean(accept_lengths))
+            print('Token num:', step)
+
             total_avg_accept_length += np.mean(accept_lengths)
     
     print('Total avg. accept length:', total_avg_accept_length / args.num_sample)
     print('Total time:', end_time - start_time)
-
     print('Avg rouge score:', np.mean(all_rouge_score))

@@ -1032,7 +1032,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     use_cache=use_cache,
                     padding_mask=padding_mask,
                     top_layers_len=top_layers_len,
-                    drafting=False,
+                    drafting=False
                 )
 
             hidden_states = layer_outputs[0]
@@ -1078,7 +1078,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     use_cache=use_cache,
                     padding_mask=padding_mask,
                     top_layers_len=top_layers_len,
-                    drafting=True,
+                    drafting=True
                 )
 
             hidden_states = layer_outputs[0]

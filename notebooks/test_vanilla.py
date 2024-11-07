@@ -31,9 +31,9 @@ from peft import PeftModel, PeftConfig
 
 import time
 
-from utils import *
-
 from rouge_score import rouge_scorer
+
+from utils import *
 
 if __name__ == '__main__':
 
@@ -73,12 +73,12 @@ if __name__ == '__main__':
     task_name = args.task_name
     prompt_shots = ''
     if task_name == 'xsum':
-        data = load_dataset('/root/DATASETS/xsum', split='test').shuffle(seed=seed).select(range(1000))
-        shots = load_dataset('/root/DATASETS/xsum',split='train').shuffle(seed=seed).select(range(n_shot))
+        data = load_dataset('/home/zmw/xsum', split='test').shuffle(seed=seed).select(range(1000))
+        shots = load_dataset('/home/zmw/xsum',split='train').shuffle(seed=seed).select(range(n_shot))
         prompt_keys=['document','summary']
     elif task_name == 'cnndm':
-        data = load_dataset('/root/DATASETS/cnn_dailymail', name='3.0.0', split='test') .shuffle(seed=seed).select(range(1000))
-        shots = load_dataset('/root/DATASETS/cnn_dailymail', name='3.0.0', split='train').shuffle(seed=seed).select(range(n_shot))
+        data = load_dataset('/home/zmw/cnn_dailymail', name='3.0.0', split='test') .shuffle(seed=seed).select(range(1000))
+        shots = load_dataset('/home/zmw/cnn_dailymail', name='3.0.0', split='train').shuffle(seed=seed).select(range(n_shot))
         prompt_keys=['article','highlights']
     for i in range(n_shot):
         prompt = 'Article: ' + shots[i][prompt_keys[0]] + '\nSummary: ' + shots[i][prompt_keys[1]].replace('\n', '') + '\n'
@@ -169,8 +169,6 @@ if __name__ == '__main__':
 
             result = tokenizer.batch_decode(output_token, skip_special_tokens=True)[0]
 
-            print(result)
-
             rouge=rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
 
             if task_name == 'xsum':
@@ -190,4 +188,5 @@ if __name__ == '__main__':
             all_rouge_score.append(rouge_score)
 
     print('Total time:', end_time - start_time)
+
     print('Avg rouge score:', np.mean(all_rouge_score))

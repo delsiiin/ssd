@@ -32,6 +32,8 @@ from peft import PeftModel, PeftConfig
 
 from utils import *
 
+from rouge_score import rouge_scorer
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -72,12 +74,12 @@ if __name__ == '__main__':
     task_name = args.task_name
     prompt_shots = ''
     if task_name == 'xsum':
-        data = load_dataset('/root/DATASETS/xsum', split='test').shuffle(seed=seed).select(range(1000))
-        shots = load_dataset('/root/DATASETS/xsum',split='train').shuffle(seed=seed).select(range(n_shot))
+        data = load_dataset('/home/zmw/xsum', split='test').shuffle(seed=seed).select(range(1000))
+        shots = load_dataset('/home/zmw/xsum',split='train').shuffle(seed=seed).select(range(n_shot))
         prompt_keys=['document','summary']
     elif task_name == 'cnndm':
-        data = load_dataset('/root/DATASETS/cnn_dailymail', name='3.0.0', split='test') .shuffle(seed=seed).select(range(1000))
-        shots = load_dataset('/root/DATASETS/cnn_dailymail', name='3.0.0', split='train').shuffle(seed=seed).select(range(n_shot))
+        data = load_dataset('/home/zmw/cnn_dailymail', name='3.0.0', split='test') .shuffle(seed=seed).select(range(1000))
+        shots = load_dataset('/home/zmw/cnn_dailymail', name='3.0.0', split='train').shuffle(seed=seed).select(range(n_shot))
         prompt_keys=['article','highlights']
     for i in range(n_shot):
         prompt = 'Article: ' + shots[i][prompt_keys[0]] + '\nSummary: ' + shots[i][prompt_keys[1]].replace('\n', '') + '\n'
@@ -96,7 +98,7 @@ if __name__ == '__main__':
     
     # print(config.num_skipped_draft_model)
 
-    lora_path = f"/root/idea/speculative_decoding/Medusa/axolotl/vicuna-7b-v1.3-qlora-ssd-out-router-top-{args.top_layers_len}-k-{args.top_k_group}"
+    lora_path = f"/home/zmw/vicuna-7b-v1.3-qlora-ssd-out-router-top-{args.top_layers_len}-k-{args.top_k_group}-davm-only-seq-2048"
     lora_config = PeftConfig.from_pretrained(lora_path)
 
     if args.early_exit:
@@ -128,6 +130,8 @@ if __name__ == '__main__':
     start_time = time.time()
 
     with torch.no_grad():
+
+        all_rouge_score = []
 
         for idx,x in tqdm(enumerate(data)):
 
@@ -220,6 +224,26 @@ if __name__ == '__main__':
             print('Decode:', tokenizer.batch_decode(input_ids[:,input_len:]))  
             # print(f'Final output: {tokenizer.decode(output_token, skip_special_tokens=True)}')
 
+            result = tokenizer.batch_decode(input_ids[:,input_len:])[0]
+
+            rouge=rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
+
+            if task_name == 'xsum':
+                references = x['summary']
+            elif task_name =='cnndm':
+                references = x['highlights']
+
+            clip_pred = result.find("\nArticle:")
+            if clip_pred > 0:
+                prediction = result[:clip_pred]
+            else:
+                prediction = result
+            rouge_score = rouge.score(prediction, references)
+
+            rouge_score = rouge_score['rouge2'].fmeasure
+
+            all_rouge_score.append(rouge_score)
+
             # plt.plot(accept_lengths)
             # plt.xlabel('Inference step')
             # plt.ylabel('Accept length')
@@ -231,3 +255,4 @@ if __name__ == '__main__':
     
     print('Total avg. accept length:', total_avg_accept_length / args.num_sample)
     print('Total time:', end_time - start_time)
+    print('Avg rouge score:', np.mean(all_rouge_score))
