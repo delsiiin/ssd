@@ -685,7 +685,7 @@ def load_model(
     if cfg.top_k_group and cfg.router_only and cfg.adapter:
         LOG.info("Freeze layers!")
 
-        for name, param in model.model.model.named_parameters():
+        for param in model.parameters():
             param.requires_grad = False
         # Leave the last medusa_num_unfreeze_layers layers trainable
         if cfg.top_layers_len > 0:
@@ -693,16 +693,20 @@ def load_model(
                 LOG.info(f"Unfreezing layer {layer}")
                 for name, param in layer.named_parameters():
                     if "lora" in name:
-                        print(name, param.requires_grad)
+                        # print(name, param.requires_grad)
                         param.requires_grad = True
+                    # param.requires_grad = True
             # Leave the last medusa_num_unfreeze_layers layers trainable to ensure the gradient can pass through
             for param in model.model.model.norm.parameters():
                 param.requires_grad = True
 
-        for name, param in model.model.router.named_parameters():
-            print(name)
-            param.requires_grad = True
+            for param in model.model.lm_head.parameters():
+                param.requires_grad = True
 
+        for name, param in model.model.router.named_parameters():
+            # print(name)
+            param.requires_grad = True
+        
         if cfg.gradient_checkpointing:
             # https://github.com/huggingface/transformers/issues/21381#issuecomment-1666498410
             from functools import partial
@@ -715,7 +719,7 @@ def load_model(
     if cfg.top_k_group and cfg.router_only and not cfg.adapter:
         LOG.info("Freeze layers!")
 
-        for name, param in model.model.named_parameters():
+        for name, param in model.named_parameters():
             param.requires_grad = False
         # Leave the last medusa_num_unfreeze_layers layers trainable
         # if cfg.top_layers_len > 0:
@@ -731,6 +735,9 @@ def load_model(
 
         for name, param in model.router.named_parameters():
             print(name)
+            param.requires_grad = True
+
+        for param in model.lm_head.parameters():
             param.requires_grad = True
 
         if cfg.gradient_checkpointing:
