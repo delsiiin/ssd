@@ -154,13 +154,14 @@ def normalize_config(cfg):
         cfg.router_only = cfg.router_only if cfg.router_only is not None else False
         cfg.resnet_num = cfg.resnet_num if cfg.resnet_num is not None else 1
         cfg.router_lr_multiplier = cfg.router_lr_multiplier if cfg.router_lr_multiplier is not None else 1.0
+
         cfg.early_exit = cfg.early_exit if cfg.early_exit is not None else False
-        cfg.ee_only = cfg.ee_only if cfg.ee_only is not None else False
+        cfg.fc = cfg.fc if cfg.fc is not None else False
+        cfg.attn = cfg.attn if cfg.attn is not None else False
+        cfg.attn_hid_dim = cfg.attn_hid_dim if cfg.attn_hid_dim is not None else False
 
         cfg.davm = cfg.davm if cfg.davm is not None else False
-        cfg.davm_only = cfg.davm_only if cfg.davm_only is not None else False
-
-
+    
     if isinstance(cfg.learning_rate, str):
         cfg.learning_rate = float(cfg.learning_rate)
 

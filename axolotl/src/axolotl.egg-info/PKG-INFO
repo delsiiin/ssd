@@ -1,0 +1,32 @@
+Metadata-Version: 2.1
+Name: axolotl
+Version: 0.3.0
+Summary: LLM Trainer
+License-File: LICENSE
+Requires-Dist: auto-gptq==0.6.0
+Requires-Dist: packaging
+Requires-Dist: bitsandbytes==0.43.0
+Requires-Dist: addict
+Requires-Dist: fire==0.6.0
+Requires-Dist: PyYAML
+Requires-Dist: sentencepiece
+Requires-Dist: wandb
+Requires-Dist: einops
+Requires-Dist: xformers==0.0.23
+Requires-Dist: optimum==1.22.0
+Requires-Dist: hf_transfer
+Requires-Dist: colorama
+Requires-Dist: numba
+Requires-Dist: numpy
+Requires-Dist: bert-score
+Requires-Dist: evaluate
+Requires-Dist: rouge-score
+Requires-Dist: scipy
+Requires-Dist: scikit-learn
+Requires-Dist: pynvml
+Requires-Dist: art
+Requires-Dist: fschat
+Provides-Extra: deepspeed
+Requires-Dist: deepspeed; extra == "deepspeed"
+
+Axolotl is a tool designed to streamline the fine-tuning of various AI models, offering support for multiple configurations and architectures.

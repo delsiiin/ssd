@@ -388,7 +388,7 @@ if __name__ == '__main__':
 
 
     config = LlamaConfig.from_pretrained(model_name)
-    config.num_skipped_draft_model = len(draft_attn_skip_masks) 
+    # config.num_skipped_draft_model = len(draft_attn_skip_masks) 
 
     # print(config.num_skipped_draft_model)
 

@@ -27,9 +27,12 @@ from axolotl.utils.bench import log_gpu_memory_usage
 from axolotl.utils.dict import DictDefault
 from axolotl.monkeypatch.ssd_utils import (
     replace_compute_loss_cross_entropy,
+    replace_compute_loss_cross_entropy_base,
     replace_compute_loss_kl_div,
     replace_compute_loss_kl_div_group,
     add_router,
+    add_router_fc,
+    add_router_attn,
     replace_create_optimizer
 )
 
@@ -258,17 +261,23 @@ def load_model(
                 from .modeling_llama_ssd_v1_top_layers import LlamaForCausalLM
                 config_kwargs["ssd_layer_groups"] = cfg.ssd_layer_groups
             elif cfg.top_k_group is not None:
-                if cfg.early_exit:
-                    if cfg.ee_only:
-                        from .modeling_llama_ssd_v1_top_layers_ee import LlamaForCausalLM
-                    else:
-                        from .modeling_llama_ssd_v1_top_layers_router_ee import LlamaForCausalLM
-                elif cfg.davm:
+            
+                if cfg.davm:
                     from .modeling_llama_ssd_v1_top_layers_router_davm import LlamaForCausalLM
+                elif cfg.early_exit:
+                    if cfg.fc:
+                        from .modeling_llama_ssd_v1_top_layers_router_fc import LlamaForCausalLM
+                    elif cfg.attn:
+                        from .modeling_llama_ssd_v1_top_layers_router_last_attn import LlamaForCausalLM
+                    else:
+                        from .modeling_llama_ssd_v1_top_layers_router_last import LlamaForCausalLM
                 else:
                     from .modeling_llama_ssd_v1_top_layers_router import LlamaForCausalLM
+
                 config_kwargs["top_k_group"] = cfg.top_k_group
                 config_kwargs["resnet_num"] = cfg.resnet_num
+            else:
+                from transformers import LlamaForCausalLM
 
             config_kwargs["top_layers_len"] = cfg.top_layers_len
 
@@ -556,13 +565,15 @@ def load_model(
 
     if cfg.top_k_group is not None:
 
-        if cfg.early_exit:
-            if cfg.ee_only:
-                from .modeling_llama_ssd_v1_top_layers_ee import LlamaForCausalLM
-            else:
-                from .modeling_llama_ssd_v1_top_layers_router_ee import LlamaForCausalLM
-        elif cfg.davm:
+        if cfg.davm:
             from .modeling_llama_ssd_v1_top_layers_router_davm import LlamaForCausalLM
+        elif cfg.early_exit:
+            if cfg.fc:
+                from .modeling_llama_ssd_v1_top_layers_router_fc import LlamaForCausalLM
+            elif cfg.attn:
+                from .modeling_llama_ssd_v1_top_layers_router_last_attn import LlamaForCausalLM
+            else:
+                from .modeling_llama_ssd_v1_top_layers_router_last import LlamaForCausalLM
         else:
             from .modeling_llama_ssd_v1_top_layers_router import LlamaForCausalLM
 
@@ -573,37 +584,33 @@ def load_model(
         assert isinstance(
             model, (LlamaForCausalLM, MistralForCausalLM)
         ), "SSD is only supported for Llama and Mistral models for now"
-
-        if not cfg.ee_only:
+        
+        if cfg.fc:
+            add_router_fc(model)
+        elif cfg.attn:
+            add_router_attn(model, cfg.attn_hid_dim)
+        else:
             add_router(model)
 
         LOG.info(
             f"top {cfg.top_layers_len} kept the same, {cfg.ssd_logging} logging"
         )
 
-        if not cfg.ee_only:
-            replace_compute_loss_cross_entropy(
-                ssd_groups_coefficient=cfg.ssd_groups_coefficient,
-                ssd_decay_coefficient=cfg.ssd_decay_coefficient,
-                ssd_scheduler=cfg.ssd_scheduler,
-                ssd_logging=cfg.ssd_logging,
-            )
-
-        # replace_compute_loss_kl_div_group(
-        #     ssd_groups_coefficient=cfg.ssd_groups_coefficient,
-        #     ssd_decay_coefficient=cfg.ssd_decay_coefficient,
-        #     distill_temperature=cfg.distill_temperature,
-        #     ssd_scheduler=cfg.ssd_scheduler,
-        #     ssd_logging=cfg.ssd_logging,
-        # )
-
-        if cfg.router_lr_multiplier != 1 and not cfg.ee_only:
+        replace_compute_loss_cross_entropy(
+            ssd_groups_coefficient=cfg.ssd_groups_coefficient,
+            ssd_decay_coefficient=cfg.ssd_decay_coefficient,
+            ssd_scheduler=cfg.ssd_scheduler,
+            ssd_logging=cfg.ssd_logging,
+            router_only=cfg.router_only
+        )
+        
+        if cfg.router_lr_multiplier != 1:
             LOG.info(f"Using Router LR multiplier {cfg.router_lr_multiplier}")
             replace_create_optimizer(
                 router_lr_multiplier=cfg.router_lr_multiplier,
             )
 
-        if cfg.adapter in ["lora", "qlora"] and not cfg.ee_only:
+        if cfg.adapter in ["lora", "qlora"]:
             # Add medusa heads to cfg.lora_modules_to_save
             if cfg.lora_modules_to_save is None:
                 cfg.lora_modules_to_save = []
@@ -682,42 +689,45 @@ def load_model(
 
     model, lora_config = load_adapter(model, cfg, cfg.adapter)
 
-    if cfg.top_k_group and cfg.router_only and cfg.adapter:
-        LOG.info("Freeze layers!")
+    if cfg.top_k_group and cfg.adapter:
 
-        for param in model.parameters():
-            param.requires_grad = False
-        # Leave the last medusa_num_unfreeze_layers layers trainable
-        if cfg.top_layers_len > 0:
-            for layer in model.model.model.layers[cfg.top_layers_len :]:
-                LOG.info(f"Unfreezing layer {layer}")
-                for name, param in layer.named_parameters():
-                    if "lora" in name:
-                        # print(name, param.requires_grad)
-                        param.requires_grad = True
-                    # param.requires_grad = True
-            # Leave the last medusa_num_unfreeze_layers layers trainable to ensure the gradient can pass through
-            # for param in model.model.model.norm.parameters():
-            #     param.requires_grad = True
+        if cfg.router_only:
 
-            # for param in model.model.lm_head.parameters():
-            #     param.requires_grad = True
+            LOG.info("Freeze layers!")
 
-        for name, param in model.model.router.named_parameters():
-            # print(name)
-            param.requires_grad = True
-        
-        if cfg.gradient_checkpointing:
-            # https://github.com/huggingface/transformers/issues/21381#issuecomment-1666498410
-            from functools import partial
+            for param in model.parameters():
+                param.requires_grad = False
+            # Leave the last medusa_num_unfreeze_layers layers trainable
+            
+            # if cfg.top_layers_len > 0:
+            #     for layer in model.model.model.layers[cfg.top_layers_len :]:
+            #         LOG.info(f"Unfreezing layer {layer}")
+            #         for name, param in layer.named_parameters():
+            #             if "lora" in name:
+            #                 # print(name, param.requires_grad)
+            #                 param.requires_grad = True
+                        
+                # Leave the last medusa_num_unfreeze_layers layers trainable to ensure the gradient can pass through
+                # for param in model.model.model.norm.parameters():
+                #     param.requires_grad = True
 
-            notfailing_checkpoint = partial(
-                torch.utils.checkpoint.checkpoint, use_reentrant=False
-            )
-            torch.utils.checkpoint.checkpoint = notfailing_checkpoint
+                # for param in model.model.lm_head.parameters():
+                #     param.requires_grad = True
 
-    # for name, param in model.named_parameters():
-    #     print(name, param.requires_grad)
+            for name, param in model.model.router.named_parameters():
+                # print(name)
+                param.requires_grad = True
+
+            
+            if cfg.gradient_checkpointing:
+                # https://github.com/huggingface/transformers/issues/21381#issuecomment-1666498410
+                from functools import partial
+
+                notfailing_checkpoint = partial(
+                    torch.utils.checkpoint.checkpoint, use_reentrant=False
+                )
+                torch.utils.checkpoint.checkpoint = notfailing_checkpoint
+
     
     if cfg.top_k_group and cfg.router_only and not cfg.adapter:
         LOG.info("Freeze layers!")
@@ -751,33 +761,9 @@ def load_model(
                 torch.utils.checkpoint.checkpoint, use_reentrant=False
             )
             torch.utils.checkpoint.checkpoint = notfailing_checkpoint
-
-    if cfg.top_k_group and cfg.ee_only:
-        LOG.info("Freeze layers!")
-
-        for name, param in model.model.named_parameters():
-            param.requires_grad = False
-        # Leave the last medusa_num_unfreeze_layers layers trainable
-        if cfg.top_layers_len > 0:
-            for layer in model.model.layers[:cfg.top_layers_len]:
-                LOG.info(f"Unfreezing layer {layer}")
-                for name, param in layer.named_parameters():
-                    if "lora" in name:
-                        print(name, param.requires_grad)
-                        param.requires_grad = True
-            # Leave the last medusa_num_unfreeze_layers layers trainable to ensure the gradient can pass through
-            for param in model.model.norm.parameters():
-                param.requires_grad = True
-
-        if cfg.gradient_checkpointing:
-            # https://github.com/huggingface/transformers/issues/21381#issuecomment-1666498410
-            from functools import partial
-
-            notfailing_checkpoint = partial(
-                torch.utils.checkpoint.checkpoint, use_reentrant=False
-            )
-            torch.utils.checkpoint.checkpoint = notfailing_checkpoint
     
+    for name, param in model.named_parameters():
+        print(name, param.requires_grad)
 
     if cfg.ddp and not load_in_8bit:
         model.to(f"cuda:{cfg.local_rank}")

@@ -1,0 +1,106 @@
+base_model: /home/zmw/Llama-2-7b-chat-hf
+model_type: LlamaForCausalLM
+tokenizer_type: LlamaTokenizer
+is_llama_derived_model: true
+
+load_in_8bit: false
+load_in_4bit: true
+strict: false
+
+# datasets:
+#   - path: /root/DATASETS/alpaca_2k_test
+#     type: alpaca
+
+datasets:
+  - path: /home/zmw/sharegpt_medusa/ShareGPT_V4.3_unfiltered_cleaned_split.json
+    type: sharegpt
+
+dataset_prepared_path:
+val_set_size: 0.01
+output_dir: /home/zmw/ssd/axolotl/models/llama-2-7b-chat-qlora-ssd-out-router-top-16-k-5-ee-only-seq-2048-all
+
+adapter: qlora
+lora_model_dir: 
+
+sequence_len: 2048
+sample_packing: true
+pad_to_sequence_len: true
+
+lora_r: 32
+lora_alpha: 16
+lora_dropout: 0.05
+lora_target_modules:
+  - gate_proj
+  - down_proj
+  - up_proj
+  - q_proj
+  - v_proj
+  - k_proj
+  - o_proj
+lora_target_linear: 
+lora_fan_in_fan_out:
+
+wandb_project: ssd
+wandb_entity:
+wandb_watch:
+wandb_run_id: ssd_router_0
+wandb_log_model: checkpoint
+
+gradient_accumulation_steps: 4
+micro_batch_size: 2
+num_epochs: 1
+optimizer: adamw_bnb_8bit
+lr_scheduler: cosine
+learning_rate: 5e-4
+
+train_on_inputs: false
+group_by_length: false
+bf16: true
+fp16: false
+tf32: false
+
+gradient_checkpointing: true
+early_stopping_patience:
+resume_from_checkpoint: 
+local_rank:
+logging_steps: 1
+xformers_attention:
+flash_attention: true
+
+warmup_steps: 40
+eval_steps: 40
+eval_table_size:
+save_steps: 200
+debug: 
+deepspeed: 
+weight_decay: 0.0
+fsdp:
+fsdp_config:
+special_tokens:
+  bos_token: "<s>"
+  eos_token: "</s>"
+  unk_token: "<unk>"
+
+
+# ssd
+ssd_layer_group:
+ssd_layer_groups_path: 
+top_layers_len: 16
+ssd_logging: true
+ssd_groups_coefficient: 0.2
+ssd_decay_coefficient: 0.8
+ssd_scheduler: constant
+
+router_only: false
+top_k_group: 5
+resnet_num: 1
+router_lr_multiplier: 4.0
+
+early_exit: true
+# davm: true
+
+# early_stopping_patience: 5
+
+# ddp_find_unused_parameters: true
+
+seed: 42

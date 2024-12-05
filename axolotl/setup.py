@@ -45,9 +45,6 @@ setup(
     install_requires=install_requires,
     dependency_links=dependency_links,
     extras_require={
-        "flash-attn": [
-            "flash-attn>=2.3.0",
-        ],
         "deepspeed": [
             "deepspeed",
         ],

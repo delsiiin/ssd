@@ -98,11 +98,11 @@ if __name__ == '__main__':
     
     # print(config.num_skipped_draft_model)
 
-    lora_path = f"/home/zmw/vicuna-7b-v1.3-qlora-ssd-out-router-top-{args.top_layers_len}-k-{args.top_k_group}-davm-only-seq-2048"
+    lora_path = f"/home/zmw/ssd/axolotl/models/vicuna-7b-v1.3-qlora-ssd-out-router-top-{args.top_layers_len}-k-{args.top_k_group}-ee-only-seq-2048-all"
     lora_config = PeftConfig.from_pretrained(lora_path)
 
     if args.early_exit:
-        from medusa.model.modeling_llama_ssd_router_ee import LlamaForCausalLM, add_router
+        from medusa.model.modeling_llama_ssd_v1_top_layers_router_last_tree import LlamaForCausalLM, add_router
     elif args.davm:
         from medusa.model.modeling_llama_ssd_router_dmlp_vattn import LlamaForCausalLM, add_router
     else:
@@ -123,7 +123,7 @@ if __name__ == '__main__':
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    ssd_choices = mc_sim_7b_63
+    ssd_choices = mc_sim_7b_63_ssd
 
     total_avg_accept_length = 0
 
@@ -147,8 +147,6 @@ if __name__ == '__main__':
             model.current_length_data = current_length_data
 
             model.current_length_data.zero_() # this is for rerun
-
-            model.itr_count = 0
             
             input_len = len(input_ids[0])
             # print('Input token length:', len(input_ids[0]))
@@ -179,7 +177,7 @@ if __name__ == '__main__':
                     if step >= args.max_new_tokens:
                         break
                     
-                    candidates, tree_candidates = generate_candidates(
+                    candidates, tree_candidates = generate_ssd_candidates(
                         ssd_logits,
                         logits,
                         ssd_buffers["tree_indices"],
@@ -187,7 +185,7 @@ if __name__ == '__main__':
                     )
 
                     with model.self_draft():
-                        ssd_logits, logits = tree_decoding(
+                        ssd_logits, logits = ssd_tree_decoding(
                             model,
                             tree_candidates,
                             past_key_values,
@@ -201,7 +199,7 @@ if __name__ == '__main__':
                         logits, candidates, temperature = 0, posterior_threshold = 0, posterior_alpha = 0
                     )
 
-                    input_ids, logits, ssd_logits, new_token = update_inference_inputs(
+                    input_ids, logits, ssd_logits, new_token = update_inference_inputs_ssd(
                         input_ids,
                         candidates,
                         best_candidate,

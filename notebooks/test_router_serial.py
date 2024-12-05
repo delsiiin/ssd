@@ -100,11 +100,11 @@ if __name__ == '__main__':
     
     # print(config.num_skipped_draft_model)
 
-    lora_path = f"/home/zmw/vicuna-7b-v1.3-qlora-ssd-out-router-top-{args.top_layers_len}-k-{args.top_k_group}-davm-only-seq-2048"
+    lora_path = f"/home/zmw/ssd/axolotl/models/vicuna-7b-v1.3-qlora-ssd-out-router-top-{args.top_layers_len}-k-{args.top_k_group}-ee-only-seq-2048"
     lora_config = PeftConfig.from_pretrained(lora_path)
 
     if args.early_exit:
-        from medusa.model.modeling_llama_ssd_router_ee import LlamaForCausalLM, add_router
+        from medusa.model.modeling_llama_ssd_v1_top_layers_router_last import LlamaForCausalLM, add_router
     elif args.davm:
         from medusa.model.modeling_llama_ssd_router_dmlp_vattn import LlamaForCausalLM, add_router
     else:
@@ -123,10 +123,11 @@ if __name__ == '__main__':
 
     model = PeftModel.from_pretrained(model, lora_path)
 
-    # for name, params in model.model.router.named_parameters():
+    # for name, params in model.named_parameters():
     #     print(name, params)
     #     is_all_zeros = torch.sum(params) == 0
     #     print(is_all_zeros)
+
 
     model = model.merge_and_unload()
 
